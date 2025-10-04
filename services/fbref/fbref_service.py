@@ -123,19 +123,27 @@ class FBREFService:
     # INCREMENTAL ENRICHMENT
     # -------------------------
     def enrich_completed_fixtures_incremental(self, fixtures_data: dict):
-        """Go game by game, enrich only if match has passed and not already enriched."""
+        """Go game by game, enrich only if match has passed, not already enriched, and game_id is valid."""
         now = datetime.now(timezone.utc)
 
         for fixture in fixtures_data.get("fixtures", []):
+            game_id = fixture.get("game_id")
+            enriched = fixture.get("enriched", False)
+
+            # Skip if already enriched or game_id is 0/None
+            if enriched or game_id in [0, None]:
+                print(f"⏭️ Skipping fixture {game_id} (already enriched or no valid game_id)")
+                continue
+
+            # Parse match date
             match_date_str = fixture.get("date")
             try:
                 match_date = datetime.strptime(match_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             except ValueError:
                 match_date = now
 
-            if match_date < now and not fixture.get("enriched", False):
-                # Match has passed and not yet enriched
-                game_id = fixture.get("game_id")
+            # Only enrich if match has passed
+            if match_date < now:
                 print(f"[1/1] Retrieving game with id={game_id}")
                 try:
                     events_df = self.fbref.read_events(match_id=game_id)
@@ -146,11 +154,9 @@ class FBREFService:
                     fixture["events"] = []
                     fixture["enriched"] = False
                     print(f"⚠️ Failed to enrich match {game_id}: {e}")
-            elif fixture.get("enriched", False):
-                print(f"ℹ️ Match {fixture.get('game_id')} already enriched, skipping")
             else:
                 fixture["events"] = []
                 fixture["enriched"] = False
-                print(f"⏳ Match {fixture.get('game_id')} not finished, skipping enrichment")
+                print(f"⏳ Match {game_id} not finished, skipping enrichment")
 
         return fixtures_data
