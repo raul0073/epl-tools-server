@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of your app
 COPY . .
 
-# Expose port
+# Expose port (Render will inject $PORT, but 8080 is safe default)
 EXPOSE 8080
 
-# Run FastAPI app
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Run FastAPI app (shell form so $PORT expands correctly)
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT
