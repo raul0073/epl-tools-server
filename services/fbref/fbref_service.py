@@ -26,6 +26,8 @@ class FBREFService:
     # -------------------------
     # READ FROM JSON ONLY, GET UPCOMING FIXTURES OR BY WEEK
     # -------------------------
+
+
     def get_fixtures(self, week: Optional[int] = None) -> Dict[str, Any]:
         if not self.fixtures_file.exists():
             return {"meta": {}, "fixtures": []}
@@ -43,9 +45,37 @@ class FBREFService:
         if week is not None:
             fixtures_data["fixtures"] = [f for f in fixtures if f.get("week") == week]
         else:
-            fixtures_data["fixtures"] = fixtures
+            # --- Find the next round (gameweek) ---
+            now = datetime.now()
+            next_fixture_dt = None
+            next_week = None
+
+            for f in fixtures:
+                date_str = f.get("date")
+                time_str = f.get("time")
+
+                if not date_str or not time_str:
+                    continue
+
+                try:
+                    fixture_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+                except ValueError:
+                    continue
+
+                if fixture_dt > now:
+                    if next_fixture_dt is None or fixture_dt < next_fixture_dt:
+                        next_fixture_dt = fixture_dt
+                        next_week = f.get("week")
+
+            if next_week is not None:
+                fixtures_data["fixtures"] = [f for f in fixtures if f.get("week") == next_week]
+            else:
+                # fallback: return last available week if season is over
+                last_week = max((f.get("week") for f in fixtures if f.get("week")), default=None)
+                fixtures_data["fixtures"] = [f for f in fixtures if f.get("week") == last_week]
 
         return fixtures_data
+
 
     # -------------------------
     # UPDATE JSON + ENRICH MATCHES
@@ -79,22 +109,27 @@ class FBREFService:
         # -------------------------
         # PRESERVE EXISTING ENRICHED FLAGS
         # -------------------------
-        existing_flags = {}
+        existing_data = {}
         if self.fixtures_file.exists():
             with open(self.fixtures_file, "r", encoding="utf-8") as f:
                 old_data = json.load(f)
                 for f_old in old_data.get("fixtures", []):
                     key = f_old.get("game_id") or f_old.get("temp_id")
                     if key:
-                        existing_flags[str(key)] = f_old.get("enriched", False)
+                        existing_data[str(key)] = {
+                            "enriched": f_old.get("enriched", False),
+                            "events": f_old.get("events", []),
+                        }
 
-        # Assign enriched flag from previous JSON
+        # Assign preserved data back
         for f in fixtures_list:
             key = f.get("game_id") or f.get("temp_id")
-            if key:
-                f["enriched"] = existing_flags.get(str(key), False)
+            if key and str(key) in existing_data:
+                f["enriched"] = existing_data[str(key)]["enriched"]
+                f["events"] = existing_data[str(key)]["events"]
             else:
                 f["enriched"] = False
+                f["events"] = []
 
         # Filter by week if specified
         if week is not None:
