@@ -34,6 +34,7 @@ class UserRead(BaseModel):
     email: EmailStr
     name: Optional[str] = None
     team_name: Optional[str] = None
+    fantasy_team_id: Optional[int] = 0
     picture: Optional[str] = None
 
     # predictions

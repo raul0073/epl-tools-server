@@ -7,6 +7,8 @@ from routes.auth.register import router as user_registration_router
 from routes.user.user_actions import router as user_update_router
 from routes.fbref.fbref_fixtures import router as fixtures_router
 from routes.fbref.fbref_players import router as players_router
+from routes.fanatsy.fantasy_route import router as fantasy_router
+from routes.fanatsy.fantasy_player_model_route import router as fantasy_player_model_router
 from fastapi.middleware.cors import CORSMiddleware as Cors
 from core.config import settings
 from services.startup.startup_service import StartupService
@@ -40,6 +42,10 @@ app.include_router(user_update_router, prefix="/api/user")
 app.include_router(players_router, prefix="/api/fbref")
 # fixtures
 app.include_router(fixtures_router, prefix="/api/fbref")
+# fantasy
+app.include_router(fantasy_router, prefix="/api/fantasy")
+# fantasy
+app.include_router(fantasy_player_model_router, prefix="/api/fantasy/player-model")
 
 # ---- CORS ----
 app.add_middleware(

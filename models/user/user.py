@@ -11,6 +11,7 @@ class User(BaseModel):
     name: str
     picture: str
     team_name: str
+    fantasy_team_id: int
     predictions: Predictions
     private_leagues: list[PrivateLeague]
     season_predictions: SeasonPredictions
