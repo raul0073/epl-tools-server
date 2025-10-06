@@ -10,6 +10,13 @@ class FantasyService:
     def __init__(self, team_id: int, cache_dir: str = "data/fpl"):
         self.team_id = team_id
         self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://fantasy.premierleague.com",
+            "Referer": "https://fantasy.premierleague.com/"
+        })
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.wishlist_file = self.cache_dir / f"wishlist_{self.team_id}.json"
@@ -18,7 +25,7 @@ class FantasyService:
     # Internal helper
     # ------------------------
     def _safe_get_json(self, url: str) -> Dict[str, Any]:
-        """Perform GET request and safely parse JSON."""
+        """Perform GET request with headers and safely parse JSON."""
         try:
             resp = self.session.get(url, timeout=10)
             resp.raise_for_status()
@@ -57,17 +64,14 @@ class FantasyService:
     # Public Data
     # ------------------------
     def get_bootstrap(self) -> Dict[str, Any]:
-        """Fetch global FPL data (players, teams, events)."""
         url = f"{self.BASE_URL}/bootstrap-static/"
         return self._safe_get_json(url)
 
     def get_team_info(self) -> Dict[str, Any]:
-        """Basic team info (public)."""
         url = f"{self.BASE_URL}/entry/{self.team_id}/"
         return self._safe_get_json(url)
 
     def get_team_picks(self, gw: int) -> Dict[str, Any]:
-        """Squad picks for a specific gameweek (public), enriched with player details."""
         picks_url = f"{self.BASE_URL}/entry/{self.team_id}/event/{gw}/picks/"
         picks_data = self._safe_get_json(picks_url)
 
@@ -103,7 +107,6 @@ class FantasyService:
     # Private Data (requires login)
     # ------------------------
     def get_my_team(self) -> Dict[str, Any]:
-        """Full current squad (requires auth)."""
         url = f"{self.BASE_URL}/my-team/{self.team_id}/"
         data = self._safe_get_json(url)
         if not data:
@@ -145,11 +148,6 @@ class FantasyService:
     # Player Utilities
     # ------------------------
     def get_players_by_position(self, position_code: int) -> List[Dict[str, Any]]:
-        """
-        Filter players by position.
-        Position codes:
-          1 = GK, 2 = DEF, 3 = MID, 4 = FWD
-        """
         bootstrap = self.get_bootstrap()
         players = bootstrap.get("elements", [])
         return [p for p in players if p.get("element_type") == position_code]
