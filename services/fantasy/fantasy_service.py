@@ -1,7 +1,7 @@
 import requests
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 
 class FantasyService:
@@ -15,6 +15,25 @@ class FantasyService:
         self.wishlist_file = self.cache_dir / f"wishlist_{self.team_id}.json"
 
     # ------------------------
+    # Internal helper
+    # ------------------------
+    def _safe_get_json(self, url: str) -> Dict[str, Any]:
+        """Perform GET request and safely parse JSON."""
+        try:
+            resp = self.session.get(url, timeout=10)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            print(f"[ERROR] Request failed for {url}: {e}")
+            return {}
+
+        try:
+            return resp.json()
+        except ValueError:
+            print(f"[ERROR] Invalid JSON response from {url}:")
+            print(resp.text[:200])
+            return {}
+
+    # ------------------------
     # Authentication
     # ------------------------
     def login(self, email: str, password: str):
@@ -26,9 +45,12 @@ class FantasyService:
             "app": "plfpl-web",
             "redirect_uri": "https://fantasy.premierleague.com/"
         }
-        resp = self.session.post(login_url, data=payload)
-        if resp.status_code != 200 or "Invalid login" in resp.text:
-            raise Exception("FPL login failed")
+        try:
+            resp = self.session.post(login_url, data=payload, timeout=10)
+            if resp.status_code != 200 or "Invalid login" in resp.text:
+                raise Exception("FPL login failed")
+        except requests.RequestException as e:
+            raise Exception(f"Login request failed: {e}")
         return True
 
     # ------------------------
@@ -37,19 +59,18 @@ class FantasyService:
     def get_bootstrap(self) -> Dict[str, Any]:
         """Fetch global FPL data (players, teams, events)."""
         url = f"{self.BASE_URL}/bootstrap-static/"
-        return self.session.get(url).json()
+        return self._safe_get_json(url)
 
     def get_team_info(self) -> Dict[str, Any]:
         """Basic team info (public)."""
         url = f"{self.BASE_URL}/entry/{self.team_id}/"
-        return self.session.get(url).json()
+        return self._safe_get_json(url)
 
     def get_team_picks(self, gw: int) -> Dict[str, Any]:
         """Squad picks for a specific gameweek (public), enriched with player details."""
         picks_url = f"{self.BASE_URL}/entry/{self.team_id}/event/{gw}/picks/"
-        picks_data = self.session.get(picks_url).json()
+        picks_data = self._safe_get_json(picks_url)
 
-        # Get player metadata from bootstrap
         bootstrap = self.get_bootstrap()
         players = {p["id"]: p for p in bootstrap.get("elements", [])}
         teams = {t["id"]: t for t in bootstrap.get("teams", [])}
@@ -57,27 +78,26 @@ class FantasyService:
 
         enriched_picks = []
         for pick in picks_data.get("picks", []):
-            player = players.get(pick["element"])
+            player = players.get(pick.get("element"))
             if player:
                 pick["player"] = {
                     "id": player["id"],
-                    "web_name": player["web_name"],   # short display name
+                    "web_name": player["web_name"],
                     "first_name": player["first_name"],
                     "second_name": player["second_name"],
-                    "team": teams[player["team"]]["name"],
-                    "position": element_types[player["element_type"]]["singular_name_short"],
-                    "now_cost": player["now_cost"] / 10,  # cost in millions
-                    "selected_by_percent": player["selected_by_percent"],
-                    "total_points": player["total_points"],
-                    "form": player["form"],
-                    "event_points": player["event_points"],
-                    "minutes": player["minutes"],
+                    "team": teams.get(player["team"], {}).get("name", "Unknown"),
+                    "position": element_types.get(player["element_type"], {}).get("singular_name_short", "Unknown"),
+                    "now_cost": player["now_cost"] / 10,
+                    "selected_by_percent": player.get("selected_by_percent", 0),
+                    "total_points": player.get("total_points", 0),
+                    "form": player.get("form", 0),
+                    "event_points": player.get("event_points", 0),
+                    "minutes": player.get("minutes", 0),
                 }
             enriched_picks.append(pick)
 
         picks_data["picks"] = enriched_picks
         return picks_data
-
 
     # ------------------------
     # Private Data (requires login)
@@ -85,10 +105,10 @@ class FantasyService:
     def get_my_team(self) -> Dict[str, Any]:
         """Full current squad (requires auth)."""
         url = f"{self.BASE_URL}/my-team/{self.team_id}/"
-        resp = self.session.get(url)
-        if resp.status_code != 200:
-            raise Exception(f"Failed to fetch my-team: {resp.text}")
-        return resp.json()
+        data = self._safe_get_json(url)
+        if not data:
+            print(f"[WARN] No data returned for my-team of team {self.team_id}")
+        return data
 
     # ------------------------
     # Wishlist Persistence
@@ -96,7 +116,11 @@ class FantasyService:
     def _load_wishlist(self) -> List[int]:
         if not self.wishlist_file.exists():
             return []
-        return json.loads(self.wishlist_file.read_text())
+        try:
+            return json.loads(self.wishlist_file.read_text())
+        except json.JSONDecodeError:
+            print("[WARN] Wishlist file corrupted, resetting")
+            return []
 
     def _save_wishlist(self, wishlist: List[int]):
         self.wishlist_file.write_text(json.dumps(wishlist))
@@ -128,5 +152,4 @@ class FantasyService:
         """
         bootstrap = self.get_bootstrap()
         players = bootstrap.get("elements", [])
-        return [p for p in players if p["element_type"] == position_code]
-
+        return [p for p in players if p.get("element_type") == position_code]
