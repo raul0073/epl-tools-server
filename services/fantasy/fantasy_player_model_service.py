@@ -1,3 +1,4 @@
+# services/fantasy/fantasy_player_model_service.py
 from typing import List, Dict, Any, Optional
 from services.fantasy.fantasy_service import FantasyService
 from services.fbref.fbref_fantasy_fixture_data import FixtureDifficultyService
@@ -5,33 +6,30 @@ from services.fbref.fbref_fantasy_fixture_data import FixtureDifficultyService
 
 class FantasyPlayerModelService:
     """
-    Fetch all FPL players by position, enrich with next fixture,
-    and compute a detailed expected points breakdown using FBref data.
+    Fetch FPL players by position, enrich with next fixture,
+    and compute expected points breakdown using FBref data.
     """
 
-    TOP_N = 20  # only compute top 20 per position per request
+    TOP_N = 20  # limit top N per position
 
     def __init__(self, league: str, season: str = "2526"):
         self.fantasy = FantasyService(team_id=0)
         self.fixture_service = FixtureDifficultyService(league=league, season=season)
 
-        # Safe fetch bootstrap data
-        self.bootstrap = self.fantasy._safe_get_json(f"{self.fantasy.BASE_URL}/bootstrap-static/") or {}
-        self.players = {p["id"]: p for p in self.bootstrap.get("elements", [])} if "elements" in self.bootstrap else {}
-        self.teams = {t["id"]: t for t in self.bootstrap.get("teams", [])} if "teams" in self.bootstrap else {}
-        self.element_types = {et["id"]: et for et in self.bootstrap.get("element_types", [])} if "element_types" in self.bootstrap else {}
+        # Bootstrap data
+        self.bootstrap = self.fantasy.get_bootstrap()
+        self.players = {p["id"]: p for p in self.bootstrap.get("elements", [])}
+        self.teams = {t["id"]: t for t in self.bootstrap.get("teams", [])}
+        self.element_types = {et["id"]: et for et in self.bootstrap.get("element_types", [])}
 
-        # Safe fetch fixtures
-        self.fixtures = self.fantasy._safe_get_json(f"{self.fantasy.BASE_URL}/fixtures/") or []
+        # Fixtures
+        self.fixtures = self.fantasy.get_fixtures()
 
     # ------------------------
-    # Player filtering & enrichment
+    # Player enrichment
     # ------------------------
     def get_players_by_position(self, position_code: int) -> List[Dict[str, Any]]:
-        """Return top N players for a position, enriched with expected points."""
-        if not self.players:
-            return []
-
+        """Return top N players by position with enriched expected points"""
         filtered = [p for p in self.players.values() if p.get("element_type") == position_code]
         filtered.sort(key=lambda p: p.get("total_points", 0), reverse=True)
 
@@ -39,10 +37,10 @@ class FantasyPlayerModelService:
         for p in filtered[:self.TOP_N]:
             team_id = p.get("team")
             next_fixture = self.get_next_fixture(team_id)
-            position_short = self.element_types.get(p.get("element_type"), {}).get("singular_name_short", "UNK")
+            pos_short = self.element_types.get(p.get("element_type"), {}).get("singular_name_short", "UNK")
 
-            breakdown = self.compute_expected_points_breakdown(p, next_fixture, position_short)
-            total_expected = sum(item.get("value", 0) for item in breakdown)
+            breakdown = self.compute_expected_points_breakdown(p, next_fixture, pos_short)
+            total_expected = round(sum(item.get("value", 0) for item in breakdown), 2)
 
             enriched.append({
                 "id": p.get("id"),
@@ -51,16 +49,16 @@ class FantasyPlayerModelService:
                 "second_name": p.get("second_name"),
                 "team": self.teams.get(team_id, {}).get("name", "Unknown"),
                 "team_id": team_id,
-                "position": position_short,
+                "position": pos_short,
                 "now_cost": p.get("now_cost", 0) / 10,
                 "selected_by_percent": p.get("selected_by_percent", 0),
                 "total_points": p.get("total_points", 0),
                 "form": float(p.get("form") or 0),
                 "event_points": p.get("event_points", 0),
                 "minutes": p.get("minutes", 0),
-                "next_fixture": next_fixture if isinstance(next_fixture, dict) else None,
+                "next_fixture": next_fixture,
                 "expected_points": breakdown,
-                "expected_points_total": round(total_expected, 2)
+                "expected_points_total": total_expected
             })
 
         enriched.sort(key=lambda x: x["total_points"], reverse=True)
@@ -70,13 +68,10 @@ class FantasyPlayerModelService:
     # Next fixture
     # ------------------------
     def get_next_fixture(self, team_id: int) -> Optional[Dict[str, Any]]:
-        """Return the next upcoming fixture for a team."""
-        if not self.fixtures:
-            return None
-
+        """Return the next upcoming fixture for a team"""
         upcoming = [
             f for f in self.fixtures
-            if isinstance(f, dict) and not f.get("finished") and (f.get("team_h") == team_id or f.get("team_a") == team_id)
+            if not f.get("finished") and team_id in (f.get("team_h"), f.get("team_a"))
         ]
         if not upcoming:
             return None
@@ -91,42 +86,34 @@ class FantasyPlayerModelService:
         }
 
     # ------------------------
-    # Expected points computation
+    # Expected points
     # ------------------------
     def compute_expected_points_breakdown(
         self, player: Dict[str, Any], next_fixture: Optional[Dict[str, Any]], position_short: str
     ) -> List[Dict[str, Any]]:
-        """Compute expected points from form, home/away, and fixture difficulty."""
+        """Compute expected points from form, home/away, and fixture difficulty"""
         breakdown: List[Dict[str, Any]] = []
 
         form = float(player.get("form") or 0)
-        breakdown.append({
-            "source": "form",
-            "value": round(form, 2),
-            "explanation": f"Current player form is {round(form, 2)}."
-        })
+        breakdown.append({"source": "form", "value": round(form, 2),
+                          "explanation": f"Current player form is {round(form, 2)}."})
 
-        if isinstance(next_fixture, dict):
+        if next_fixture:
+            # Home/away modifier
             home = next_fixture.get("home", False)
-            home_modifier = 1.1 if home else 0.9
-            home_text = "home advantage" if home else "away disadvantage"
-            breakdown.append({
-                "source": "home_away",
-                "value": round(form * (home_modifier - 1), 2),
-                "explanation": f"This fixture has {home_text}."
-            })
+            home_mod = 1.1 if home else 0.9
+            breakdown.append({"source": "home_away", "value": round(form * (home_mod - 1), 2),
+                              "explanation": f"{'Home advantage' if home else 'Away disadvantage'} applied."})
 
+            # Fixture difficulty modifier
             opponent_name = next_fixture.get("opponent_name", "Unknown")
-            fixture_modifier = self.fixture_service.get_fixture_modifier(opponent_name, position_short)
+            fixture_mod = self.fixture_service.get_fixture_modifier(opponent_name, position_short)
             difficulty_text = (
-                "tougher opponent reduces expected points" if fixture_modifier < 0
-                else "easier opponent increases expected points" if fixture_modifier > 0
-                else "neutral opponent"
+                "easier opponent" if fixture_mod > 0 else
+                "tougher opponent" if fixture_mod < 0 else
+                "neutral opponent"
             )
-            breakdown.append({
-                "source": "fixture_difficulty",
-                "value": fixture_modifier,
-                "explanation": f"Fixture difficulty vs {opponent_name}: {difficulty_text}."
-            })
+            breakdown.append({"source": "fixture_difficulty", "value": fixture_mod,
+                              "explanation": f"Fixture difficulty vs {opponent_name}: {difficulty_text}."})
 
         return breakdown
